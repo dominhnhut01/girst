@@ -3,7 +3,7 @@ mod girst_init;
 use core::panic;
 use std::{env, path::PathBuf};
 
-use data_model::{Blob, Database, Workspace};
+use data_model::{blob::Blob, database::Database, workspace::Workspace};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
