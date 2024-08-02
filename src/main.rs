@@ -1,5 +1,6 @@
 mod data_model;
 mod girst_init;
+use core::panic;
 use std::{env, path::PathBuf};
 
 use data_model::{Blob, Database, Workspace};
@@ -24,11 +25,21 @@ fn main() {
                 let workspace = Workspace::new(root_dir);
                 let database = Database::new(db_path);
 
-                for file_path in workspace.list_files() {
-                    let data = workspace.read_file(file_path);
-                    let blob = Blob::new(data);
-
-                    
+                match workspace.list_files() {
+                    Ok(file_paths) => {
+                        for file_path in file_paths {
+                            let data = match workspace.read_file(file_path) {
+                                Ok(data) => data,
+                                Err(e) => panic!("Failed reading file. {}", e),
+                            };
+                            let mut blob = Blob::new(data);
+                            match database.store(&mut blob) {
+                                Ok(()) => {}
+                                Err(e) => panic!("Failed storing to the database. {}", e),
+                            }
+                        }
+                    }
+                    Err(e) => panic!("{}", e),
                 }
             }
             None => panic!("Error: No root dir  ectory provided."),
