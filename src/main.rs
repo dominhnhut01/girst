@@ -16,6 +16,7 @@ use girst::{
         index::{hex_to_oid, Index, IndexEntry},
         object::GitObject,
         refs::Refs,
+        status::StatusReport,
         tree::Tree,
         workspace::Workspace,
     },
@@ -33,18 +34,19 @@ fn main() -> ExitCode {
     }
 }
 
-/// Dispatches `init`, `add`, and `commit` subcommands from process arguments.
+/// Dispatches `init`, `add`, `commit`, and `status` subcommands from process arguments.
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     let command = args
         .get(1)
         .map(String::as_str)
-        .ok_or_else(|| "Usage: girst <init|add|commit> [options]".to_string())?;
+        .ok_or_else(|| "Usage: girst <init|add|commit|status> [options]".to_string())?;
 
     match command {
         "init" => run_init(&args[2..]),
         "add" => run_add(&args[2..]),
         "commit" => run_commit(&args[2..]),
+        "status" => run_status(&args[2..]),
         _ => Err(format!("'{command}' is not a girst command.")),
     }
 }
@@ -200,5 +202,38 @@ fn run_commit(args: &[String]) -> Result<(), String> {
     } else {
         println!("[{short_oid}] {first_line}");
     }
+    Ok(())
+}
+
+/// Executes `girst status [--porcelain]` in the current working directory.
+fn run_status(args: &[String]) -> Result<(), String> {
+    let porcelain = match args {
+        [] => false,
+        [flag] if flag == "--porcelain" => true,
+        _ => return Err("Usage: girst status [--porcelain]".to_string()),
+    };
+
+    let root_dir = PathBuf::from(".");
+    let girst_path = root_dir.join(".girst");
+    if !girst_path.is_dir() {
+        return Err("Not a girst repository (or any of the parent directories): .girst".to_string());
+    }
+
+    let workspace = Workspace::new(&root_dir);
+    let db = Database::new(girst_path.join("objects"));
+    let refs = Refs::new(&girst_path);
+    let mut index = Index::new(girst_path.join("index"));
+    index
+        .load()
+        .map_err(|e| format!("Failed loading index: {e}"))?;
+
+    let report = StatusReport::collect(&workspace, &db, &index, &refs)
+        .map_err(|e| format!("Failed collecting status: {e}"))?;
+    let output = if porcelain {
+        report.format_porcelain()
+    } else {
+        report.format_human()
+    };
+    print!("{output}");
     Ok(())
 }

@@ -9,5 +9,6 @@ pub mod index;
 pub mod lockfile;
 pub mod object;
 pub mod refs;
+pub mod status;
 pub mod tree;
 pub mod workspace;
