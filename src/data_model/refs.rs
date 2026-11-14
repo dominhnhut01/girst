@@ -1,10 +1,8 @@
 //! Git reference (`HEAD`) reader and atomic lockfile updater.
 
-use std::{
-    fs::{self, OpenOptions},
-    io::{self, Write},
-    path::PathBuf,
-};
+use std::{fs, io, path::PathBuf};
+
+use super::lockfile::Lockfile;
 
 /// Manages reading and atomically updating `.girst/HEAD`.
 pub struct Refs {
@@ -41,21 +39,9 @@ impl Refs {
     /// Returns `AlreadyExists` if `HEAD.lock` is already present.
     pub fn update_head(&self, oid: &str) -> io::Result<()> {
         let head_path = self.girst_path.join("HEAD");
-        let lock_path = self.girst_path.join("HEAD.lock");
-
-        let mut lock_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)?;
-
-        if let Err(e) = lock_file.write_all(format!("{}\n", oid).as_bytes()) {
-            let _ = fs::remove_file(&lock_path);
-            return Err(e);
-        }
-        drop(lock_file);
-
-        fs::rename(&lock_path, &head_path)?;
-        Ok(())
+        let mut lock = Lockfile::hold_for_update(&head_path)?;
+        lock.write(format!("{}\n", oid).as_bytes())?;
+        lock.commit()
     }
 }
 
