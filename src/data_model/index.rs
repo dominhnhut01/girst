@@ -158,6 +158,15 @@ impl Index {
         }
     }
 
+    /// Removes `path` from the index if present, marking the index dirty when removed.
+    pub fn remove(&mut self, path: &str) -> Option<IndexEntry> {
+        let removed = self.entries.remove(path);
+        if removed.is_some() {
+            self.changed = true;
+        }
+        removed
+    }
+
     /// Removes ancestor file entries and descendant directory entries that conflict with `path`.
     fn discard_conflicts(&mut self, path: &str) {
         // Check each '/' boundary so adding "a/b" removes file "a" without touching "ab".

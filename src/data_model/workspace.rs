@@ -25,6 +25,11 @@ impl Workspace {
         Workspace { ignore_dir, path }
     }
 
+    /// Returns the workspace root directory path.
+    pub fn root(&self) -> &Path {
+        &self.path
+    }
+
     /// Recursively lists all non-ignored files as paths relative to the workspace root.
     pub fn list_files(&self) -> io::Result<Vec<PathBuf>> {
         let mut entries = Vec::new();

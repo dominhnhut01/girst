@@ -104,11 +104,8 @@ impl Refs {
         read_trimmed_file(&branch_path)
     }
 
-    /// Creates a new local branch `name` pointing to `oid`.
-    ///
-    /// Fails with `InvalidInput` for unsafe branch names and `AlreadyExists` if `name` already
-    /// exists or conflicts with a file/directory prefix under `refs/heads`.
-    pub fn create_branch(&self, name: &str, oid: &str) -> io::Result<()> {
+    /// Validates that `name` is a safe, non-existing branch name without file/directory ref conflicts.
+    pub fn check_branch_available(&self, name: &str) -> io::Result<()> {
         validate_branch_name(name)?;
         let heads_dir = self.heads_dir();
         let target = heads_dir.join(name);
@@ -127,7 +124,7 @@ impl Refs {
         }
 
         // Guard against creating `a/b` when `a` already exists as a branch file.
-        let mut prefix = heads_dir.clone();
+        let mut prefix = heads_dir;
         let parts: Vec<&str> = name.split('/').collect();
         for part in &parts[..parts.len().saturating_sub(1)] {
             prefix.push(part);
@@ -138,7 +135,16 @@ impl Refs {
                 ));
             }
         }
+        Ok(())
+    }
 
+    /// Creates a new local branch `name` pointing to `oid`.
+    ///
+    /// Fails with `InvalidInput` for unsafe branch names and `AlreadyExists` if `name` already
+    /// exists or conflicts with a file/directory prefix under `refs/heads`.
+    pub fn create_branch(&self, name: &str, oid: &str) -> io::Result<()> {
+        self.check_branch_available(name)?;
+        let target = self.heads_dir().join(name);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -215,6 +221,13 @@ impl Refs {
         } else {
             write_ref_atomically(&head_path, commit_oid)
         }
+    }
+
+    /// Atomically points `.girst/HEAD` symbolically to `refs/heads/<branch>` (used for unborn `checkout -b`).
+    pub fn set_symbolic_head(&self, branch: &str) -> io::Result<()> {
+        validate_branch_name(branch)?;
+        let head_path = self.girst_path.join("HEAD");
+        write_ref_atomically(&head_path, &format!("ref: refs/heads/{branch}"))
     }
 
     /// Returns the path to `.girst/refs/heads`.

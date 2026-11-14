@@ -10,8 +10,14 @@ use crate::data_model::lockfile::Lockfile;
 pub fn girst_init(working_dir: Option<&str>) -> io::Result<PathBuf> {
     let root = PathBuf::from(working_dir.unwrap_or("."));
     let girst_path = root.join(".girst");
-    for dir in ["objects", "refs/heads"] {
+    for dir in ["objects", "refs/heads", "info"] {
         fs::create_dir_all(girst_path.join(dir))?;
+    }
+    let exclude_path = girst_path.join("info/exclude");
+    if !exclude_path.exists() {
+        let mut lock = Lockfile::hold_for_update(&exclude_path)?;
+        lock.write(b"/.girst\n")?;
+        lock.commit()?;
     }
     let head_path = girst_path.join("HEAD");
     if !head_path.exists() {

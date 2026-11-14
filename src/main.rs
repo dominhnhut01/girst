@@ -11,6 +11,7 @@ use girst::{
     data_model::{
         author::Author,
         blob::Blob,
+        checkout::{checkout, checkout_new_branch},
         commit::Commit,
         database::Database,
         diff::{diff_cached, diff_workspace},
@@ -37,14 +38,14 @@ fn main() -> ExitCode {
     }
 }
 
-/// Dispatches `init`, `add`, `commit`, `status`, `diff`, `log`, and `branch` subcommands from process arguments.
+/// Dispatches `init`, `add`, `commit`, `status`, `diff`, `log`, `branch`, and `checkout` subcommands.
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     let command = args
         .get(1)
         .map(String::as_str)
         .ok_or_else(|| {
-            "Usage: girst <init|add|commit|status|diff|log|branch> [options]".to_string()
+            "Usage: girst <init|add|commit|status|diff|log|branch|checkout> [options]".to_string()
         })?;
 
     match command {
@@ -55,6 +56,7 @@ fn run() -> Result<(), String> {
         "diff" => run_diff(&args[2..]),
         "log" => run_log(&args[2..]),
         "branch" => run_branch(&args[2..]),
+        "checkout" => run_checkout(&args[2..]),
         _ => Err(format!("'{command}' is not a girst command.")),
     }
 }
@@ -366,5 +368,35 @@ fn run_branch(args: &[String]) -> Result<(), String> {
                 .map_err(|e| format!("Failed creating branch '{name}': {e}"))
         }
         _ => Err("Usage: girst branch [-d <name> | <name> [<start-rev>]]".to_string()),
+    }
+}
+
+/// Executes `girst checkout [-b <new-branch> [<start-rev>] | <target>]` in the current working directory.
+fn run_checkout(args: &[String]) -> Result<(), String> {
+    let root_dir = PathBuf::from(".");
+    let girst_path = root_dir.join(".girst");
+    if !girst_path.is_dir() {
+        return Err("Not a girst repository (or any of the parent directories): .girst".to_string());
+    }
+
+    let workspace = Workspace::new(&root_dir);
+    let db = Database::new(girst_path.join("objects"));
+    let refs = Refs::new(&girst_path);
+    let mut index = Index::new(girst_path.join("index"));
+
+    match args {
+        [flag, new_branch] if flag == "-b" && !new_branch.starts_with('-') => {
+            checkout_new_branch(&workspace, &db, &refs, &mut index, new_branch, None)
+                .map_err(|e| format!("Failed checking out new branch '{new_branch}': {e}"))
+        }
+        [flag, new_branch, start_rev]
+            if flag == "-b" && !new_branch.starts_with('-') && !start_rev.starts_with('-') =>
+        {
+            checkout_new_branch(&workspace, &db, &refs, &mut index, new_branch, Some(start_rev))
+                .map_err(|e| format!("Failed checking out new branch '{new_branch}': {e}"))
+        }
+        [target] if !target.starts_with('-') => checkout(&workspace, &db, &refs, &mut index, target)
+            .map_err(|e| format!("Failed checking out '{target}': {e}")),
+        _ => Err("Usage: girst checkout [-b <new-branch> [<start-rev>] | <target>]".to_string()),
     }
 }

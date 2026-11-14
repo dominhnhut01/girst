@@ -2,6 +2,7 @@
 
 pub mod author;
 pub mod blob;
+pub mod checkout;
 pub mod commit;
 pub mod database;
 pub mod diff;
