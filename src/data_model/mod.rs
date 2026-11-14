@@ -4,6 +4,7 @@ pub mod author;
 pub mod blob;
 pub mod commit;
 pub mod database;
+pub mod diff;
 pub mod entry;
 pub mod index;
 pub mod lockfile;

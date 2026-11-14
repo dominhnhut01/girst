@@ -112,7 +112,7 @@ impl StatusReport {
 }
 
 /// Loads the flattened `HEAD` tree map, or returns an empty map when `HEAD` is unborn.
-fn load_head_tree(
+pub(crate) fn load_head_tree(
     db: &Database,
     refs: &Refs,
 ) -> io::Result<BTreeMap<String, (String, String)>> {
@@ -248,7 +248,7 @@ fn collect_untracked(workspace: &Workspace, index: &Index) -> io::Result<Vec<Str
 }
 
 /// Computes the raw 20-byte Git `blob` SHA-1 OID in memory without writing to the database.
-fn hash_blob_oid(data: &[u8]) -> [u8; 20] {
+pub(crate) fn hash_blob_oid(data: &[u8]) -> [u8; 20] {
     let header = format!("blob {}\0", data.len());
     let mut hasher = Sha1::new();
     hasher.update(header.as_bytes());
