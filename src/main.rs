@@ -15,6 +15,7 @@ use girst::{
         database::Database,
         diff::{diff_cached, diff_workspace},
         index::{hex_to_oid, Index, IndexEntry},
+        log::{collect_log, format_log, format_oneline},
         object::GitObject,
         refs::Refs,
         status::StatusReport,
@@ -35,13 +36,13 @@ fn main() -> ExitCode {
     }
 }
 
-/// Dispatches `init`, `add`, `commit`, `status`, and `diff` subcommands from process arguments.
+/// Dispatches `init`, `add`, `commit`, `status`, `diff`, and `log` subcommands from process arguments.
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     let command = args
         .get(1)
         .map(String::as_str)
-        .ok_or_else(|| "Usage: girst <init|add|commit|status|diff> [options]".to_string())?;
+        .ok_or_else(|| "Usage: girst <init|add|commit|status|diff|log> [options]".to_string())?;
 
     match command {
         "init" => run_init(&args[2..]),
@@ -49,6 +50,7 @@ fn run() -> Result<(), String> {
         "commit" => run_commit(&args[2..]),
         "status" => run_status(&args[2..]),
         "diff" => run_diff(&args[2..]),
+        "log" => run_log(&args[2..]),
         _ => Err(format!("'{command}' is not a girst command.")),
     }
 }
@@ -269,6 +271,33 @@ fn run_diff(args: &[String]) -> Result<(), String> {
     }
     .map_err(|e| format!("Failed computing diff: {e}"))?;
 
+    print!("{output}");
+    Ok(())
+}
+
+/// Executes `girst log [--oneline]` in the current working directory.
+fn run_log(args: &[String]) -> Result<(), String> {
+    let oneline = match args {
+        [] => false,
+        [flag] if flag == "--oneline" => true,
+        _ => return Err("Usage: girst log [--oneline]".to_string()),
+    };
+
+    let root_dir = PathBuf::from(".");
+    let girst_path = root_dir.join(".girst");
+    if !girst_path.is_dir() {
+        return Err("Not a girst repository (or any of the parent directories): .girst".to_string());
+    }
+
+    let db = Database::new(girst_path.join("objects"));
+    let refs = Refs::new(&girst_path);
+    let commits = collect_log(&db, &refs).map_err(|e| format!("Failed reading log: {e}"))?;
+
+    let output = if oneline {
+        format_oneline(&commits)
+    } else {
+        format_log(&commits)
+    };
     print!("{output}");
     Ok(())
 }

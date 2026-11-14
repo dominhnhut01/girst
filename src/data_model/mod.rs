@@ -8,6 +8,7 @@ pub mod diff;
 pub mod entry;
 pub mod index;
 pub mod lockfile;
+pub mod log;
 pub mod object;
 pub mod refs;
 pub mod status;
