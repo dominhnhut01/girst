@@ -1,3 +1,5 @@
+//! CLI entry point for `girst`.
+
 mod data_model;
 mod girst_init;
 use core::panic;
@@ -5,6 +7,7 @@ use std::{env, path::PathBuf};
 
 use data_model::{blob::Blob, database::Database, workspace::Workspace};
 
+/// Parses CLI arguments and dispatches `init` and `commit` commands.
 fn main() {
     let args: Vec<String> = env::args().collect();
     let command = (&args[1]).as_str();
@@ -32,7 +35,7 @@ fn main() {
                                 Ok(data) => data,
                                 Err(e) => panic!("Failed reading file. {}", e),
                             };
-                            let mut blob = Blob::new(data);
+                            let mut blob = Blob::new(data.into_bytes());
                             match database.store(&mut blob) {
                                 Ok(()) => {}
                                 Err(e) => panic!("Failed storing to the database. {}", e),
