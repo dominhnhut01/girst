@@ -9,10 +9,12 @@ use std::{
 
 use uuid::Uuid;
 
+/// Returns the compiled `girst` binary path.
 fn girst_bin() -> &'static str {
     env!("CARGO_BIN_EXE_girst")
 }
 
+/// Returns a unique temporary repository directory path.
 fn temp_repo_dir() -> PathBuf {
     std::env::temp_dir().join(format!("girst_interop_test_{}", Uuid::new_v4()))
 }
@@ -43,6 +45,17 @@ fn init_two_commits_parent_chain_and_git_fsck_full() {
     fs::write(&script_path, b"#!/bin/sh\necho ok\n").unwrap();
     fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
 
+    let add1_out = Command::new(girst_bin())
+        .args(["add", "."])
+        .current_dir(&repo)
+        .output()
+        .expect("run first girst add");
+    assert!(
+        add1_out.status.success(),
+        "first add failed: {}",
+        String::from_utf8_lossy(&add1_out.stderr)
+    );
+
     let c1_out = Command::new(girst_bin())
         .args(["commit", "-m", "initial commit"])
         .current_dir(&repo)
@@ -68,6 +81,17 @@ fn init_two_commits_parent_chain_and_git_fsck_full() {
     fs::create_dir_all(repo.join("docs")).unwrap();
     fs::write(repo.join("docs/guide.md"), b"guide\n").unwrap();
     fs::write(repo.join("src/lib.rs"), b"pub fn v() -> u8 { 2 }\n").unwrap();
+
+    let add2_out = Command::new(girst_bin())
+        .args(["add", "docs", "src/lib.rs"])
+        .current_dir(&repo)
+        .output()
+        .expect("run second girst add");
+    assert!(
+        add2_out.status.success(),
+        "second add failed: {}",
+        String::from_utf8_lossy(&add2_out.stderr)
+    );
 
     let c2_out = Command::new(girst_bin())
         .args(["commit", "-m", "second commit"])

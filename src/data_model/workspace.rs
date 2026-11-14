@@ -56,15 +56,100 @@ impl Workspace {
         fs::read(self.path.join(path))
     }
 
+    /// Returns the `fs::Metadata` for `path` (interpreted relative to the workspace root).
+    pub fn stat_file(&self, path: &Path) -> io::Result<fs::Metadata> {
+        fs::metadata(self.path.join(path))
+    }
+
+    /// Expands `target` (`.`/root, file, or directory) into normalized `/` workspace-relative paths.
+    ///
+    /// Rejects missing paths, `.girst`/`.git` metadata paths, and paths outside the workspace root.
+    pub fn expand_path(&self, target: &Path) -> io::Result<Vec<String>> {
+        let canon_root = fs::canonicalize(&self.path)?;
+        let candidate = if target.is_absolute() {
+            target.to_path_buf()
+        } else {
+            self.path.join(target)
+        };
+        let canon_target = fs::canonicalize(&candidate)?;
+
+        let rel = canon_target.strip_prefix(&canon_root).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("path '{}' is outside workspace", target.display()),
+            )
+        })?;
+
+        if let Some(first) = rel.components().next() {
+            let name = first.as_os_str();
+            if name == ".girst" || name == ".git" {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("cannot add repository metadata path '{}'", target.display()),
+                ));
+            }
+        }
+
+        let mut results = Vec::new();
+        self.expand_canonical_recursive(&canon_root, &canon_target, &mut results)?;
+        Ok(results)
+    }
+
+    /// Recursively collects normalized `/` workspace-relative file paths under `canon_cur`.
+    fn expand_canonical_recursive(
+        &self,
+        canon_root: &Path,
+        canon_cur: &Path,
+        out: &mut Vec<String>,
+    ) -> io::Result<()> {
+        if canon_cur != canon_root {
+            if let Some(name) = canon_cur.file_name() {
+                if canon_cur.is_dir() && (name == ".girst" || name == ".git" || name == "target") {
+                    return Ok(());
+                }
+            }
+        }
+
+        if canon_cur.is_dir() {
+            for entry in fs::read_dir(canon_cur)? {
+                let entry = entry?;
+                self.expand_canonical_recursive(canon_root, &entry.path(), out)?;
+            }
+        } else {
+            let rel = canon_cur
+                .strip_prefix(canon_root)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            out.push(normalize_rel_path(rel)?);
+        }
+        Ok(())
+    }
+
     /// Returns the Git file mode (`"100755"` if executable on Unix, `"100644"` otherwise) for `path`.
     pub fn stat_mode(&self, path: &Path) -> io::Result<&'static str> {
-        let metadata = fs::metadata(self.path.join(path))?;
+        let metadata = self.stat_file(path)?;
         if metadata.permissions().mode() & 0o111 != 0 {
             Ok("100755")
         } else {
             Ok("100644")
         }
     }
+}
+
+/// Formats a workspace-relative `Path` as a normalized forward-slash UTF-8 string.
+fn normalize_rel_path(rel: &Path) -> io::Result<String> {
+    let mut parts = Vec::new();
+    for component in rel.components() {
+        if let std::path::Component::Normal(seg) = component {
+            let s = seg.to_str().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("non-utf8 path component in '{}'", rel.display()),
+                )
+            })?;
+            parts.push(s);
+        }
+    }
+    Ok(parts.join("/"))
 }
 
 #[cfg(test)]

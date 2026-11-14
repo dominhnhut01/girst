@@ -3,14 +3,21 @@
 use std::{
     env,
     io::{self, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::ExitCode,
 };
 
 use girst::{
     data_model::{
-        author::Author, blob::Blob, commit::Commit, database::Database, object::GitObject,
-        refs::Refs, tree::Tree, workspace::Workspace,
+        author::Author,
+        blob::Blob,
+        commit::Commit,
+        database::Database,
+        index::{hex_to_oid, Index, IndexEntry},
+        object::GitObject,
+        refs::Refs,
+        tree::Tree,
+        workspace::Workspace,
     },
     girst_init,
 };
@@ -26,16 +33,17 @@ fn main() -> ExitCode {
     }
 }
 
-/// Dispatches `init` and `commit` subcommands from process arguments.
+/// Dispatches `init`, `add`, and `commit` subcommands from process arguments.
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     let command = args
         .get(1)
         .map(String::as_str)
-        .ok_or_else(|| "Usage: girst <init|commit> [options]".to_string())?;
+        .ok_or_else(|| "Usage: girst <init|add|commit> [options]".to_string())?;
 
     match command {
         "init" => run_init(&args[2..]),
+        "add" => run_add(&args[2..]),
         "commit" => run_commit(&args[2..]),
         _ => Err(format!("'{command}' is not a girst command.")),
     }
@@ -79,7 +87,62 @@ fn parse_commit_message(args: &[String]) -> Result<String, String> {
     Ok(message)
 }
 
-/// Executes `girst commit [-m <msg>]` in the current working directory.
+/// Executes `girst add <paths...>` in the current working directory.
+fn run_add(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        return Err("Usage: girst add <paths...>".to_string());
+    }
+
+    let root_dir = PathBuf::from(".");
+    let girst_path = root_dir.join(".girst");
+    if !girst_path.is_dir() {
+        return Err("Not a girst repository (or any of the parent directories): .girst".to_string());
+    }
+
+    let workspace = Workspace::new(&root_dir);
+    let db = Database::new(girst_path.join("objects"));
+    let mut index = Index::new(girst_path.join("index"));
+    index
+        .load_for_update()
+        .map_err(|e| format!("Failed locking index: {e}"))?;
+
+    // Expand and validate all CLI paths before mutating blobs or committing the index.
+    let mut expanded_paths = Vec::new();
+    for arg in args {
+        let paths = workspace
+            .expand_path(Path::new(arg))
+            .map_err(|e| format!("Failed expanding '{arg}': {e}"))?;
+        expanded_paths.extend(paths);
+    }
+
+    for rel_str in expanded_paths {
+        let rel_path = Path::new(&rel_str);
+        let data = workspace
+            .read_file(rel_path)
+            .map_err(|e| format!("Failed reading '{rel_str}': {e}"))?;
+        let meta = workspace
+            .stat_file(rel_path)
+            .map_err(|e| format!("Failed stating '{rel_str}': {e}"))?;
+
+        let mut blob = Blob::new(data);
+        db.store(&mut blob)
+            .map_err(|e| format!("Failed storing blob for '{rel_str}': {e}"))?;
+        let oid_hex = blob
+            .oid()
+            .ok_or_else(|| "Blob OID missing after store".to_string())?;
+        let oid = hex_to_oid(oid_hex)
+            .map_err(|e| format!("Invalid blob OID '{oid_hex}': {e}"))?;
+
+        index.add(IndexEntry::from_metadata(rel_str, oid, &meta));
+    }
+
+    index
+        .write_updates()
+        .map_err(|e| format!("Failed writing index: {e}"))?;
+    Ok(())
+}
+
+/// Executes `girst commit [-m <msg>]` from the staged `.girst/index`.
 fn run_commit(args: &[String]) -> Result<(), String> {
     let root_dir = PathBuf::from(".");
     let girst_path = root_dir.join(".girst");
@@ -88,31 +151,26 @@ fn run_commit(args: &[String]) -> Result<(), String> {
     }
 
     let message = parse_commit_message(args)?;
-    let workspace = Workspace::new(&root_dir);
     let db = Database::new(girst_path.join("objects"));
     let refs = Refs::new(&girst_path);
+    let mut index = Index::new(girst_path.join("index"));
+    index
+        .load()
+        .map_err(|e| format!("Failed loading index: {e}"))?;
 
-    let file_paths = workspace
-        .list_files()
-        .map_err(|e| format!("Failed listing workspace files: {e}"))?;
+    if index.is_empty() {
+        return Err("nothing to commit".to_string());
+    }
 
-    let mut tree_items = Vec::with_capacity(file_paths.len());
-    for rel_path in file_paths {
-        let data = workspace
-            .read_file(&rel_path)
-            .map_err(|e| format!("Failed reading '{}': {e}", rel_path.display()))?;
-        let mode = workspace
-            .stat_mode(&rel_path)
-            .map_err(|e| format!("Failed reading mode for '{}': {e}", rel_path.display()))?;
-
-        let mut blob = Blob::new(data);
-        db.store(&mut blob)
-            .map_err(|e| format!("Failed storing blob for '{}': {e}", rel_path.display()))?;
-        let oid = blob
-            .oid()
-            .ok_or_else(|| "Blob OID missing after store".to_string())?
-            .to_string();
-        tree_items.push((rel_path, oid, mode.to_string()));
+    let mut tree_items = Vec::with_capacity(index.len());
+    for entry in index.entries() {
+        let oid = hex::encode(entry.oid);
+        let mode = if entry.mode == 0o100755 {
+            "100755"
+        } else {
+            "100644"
+        };
+        tree_items.push((PathBuf::from(&entry.path), oid, mode.to_string()));
     }
 
     let tree = Tree::build(tree_items, &db).map_err(|e| format!("Failed storing tree: {e}"))?;
