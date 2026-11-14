@@ -14,12 +14,9 @@ fn main() {
     let command = (&args[1]).as_str();
 
     match command {
-        "init" => match args.get(2) {
-            Some(working_dir) => match girst_init::girst_init(working_dir) {
-                Ok(()) => println!("Successfully initialized .girst"),
-                Err(e) => panic!("Error initializing .girst: {}", e),
-            },
-            None => panic!("Error: No argument provided for init."),
+        "init" => match girst_init::girst_init(args.get(2).map(String::as_str)) {
+            Ok(_) => println!("Successfully initialized .girst"),
+            Err(e) => panic!("Error initializing .girst: {}", e),
         },
         "commit" => match args.get(2) {
             Some(root_dir) => {
