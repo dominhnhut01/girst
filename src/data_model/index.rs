@@ -1,6 +1,7 @@
 //! Git binary index (`.girst/index`) `DIRC` v2 codec and entry metadata representation.
 
 use std::{
+    collections::BTreeMap,
     fs, io,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
@@ -102,8 +103,9 @@ pub fn hex_to_oid(hex_oid: &str) -> io::Result<[u8; 20]> {
 /// Manages reading and atomically writing the `.girst/index` binary file.
 pub struct Index {
     path: PathBuf,
-    entries: Vec<IndexEntry>,
+    entries: BTreeMap<String, IndexEntry>,
     lockfile: Option<Lockfile>,
+    changed: bool,
 }
 
 impl Index {
@@ -111,8 +113,9 @@ impl Index {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Index {
             path: path.into(),
-            entries: Vec::new(),
+            entries: BTreeMap::new(),
             lockfile: None,
+            changed: false,
         }
     }
 
@@ -121,18 +124,68 @@ impl Index {
         &self.path
     }
 
-    /// Returns a slice of currently loaded or staged entries.
-    pub fn entries(&self) -> &[IndexEntry] {
-        &self.entries
+    /// Returns an iterator over staged entries in deterministic UTF-8 path byte order.
+    pub fn entries(&self) -> impl Iterator<Item = &IndexEntry> {
+        self.entries.values()
     }
 
-    /// Returns a mutable reference to the entries list.
-    pub fn entries_mut(&mut self) -> &mut Vec<IndexEntry> {
-        &mut self.entries
+    /// Looks up a staged entry by its workspace-relative path.
+    pub fn get(&self, path: &str) -> Option<&IndexEntry> {
+        self.entries.get(path)
+    }
+
+    /// Returns the number of entries in the index.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Returns `true` if the index contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Returns `true` if the in-memory index has uncommitted modifications.
+    pub fn is_changed(&self) -> bool {
+        self.changed
+    }
+
+    /// Stages `entry`, resolving any file/directory path conflicts and tracking dirty state.
+    pub fn add(&mut self, entry: IndexEntry) {
+        self.discard_conflicts(&entry.path);
+        if self.entries.get(&entry.path) != Some(&entry) {
+            self.entries.insert(entry.path.clone(), entry);
+            self.changed = true;
+        }
+    }
+
+    /// Removes ancestor file entries and descendant directory entries that conflict with `path`.
+    fn discard_conflicts(&mut self, path: &str) {
+        // Check each '/' boundary so adding "a/b" removes file "a" without touching "ab".
+        for (idx, _) in path.match_indices('/') {
+            if self.entries.remove(&path[..idx]).is_some() {
+                self.changed = true;
+            }
+        }
+
+        // Range-scan from "path/" so adding "a" removes "a/..." without touching "ab".
+        let prefix = format!("{path}/");
+        let descendants: Vec<String> = self
+            .entries
+            .range(prefix.clone()..)
+            .take_while(|(k, _)| k.starts_with(&prefix))
+            .map(|(k, _)| k.clone())
+            .collect();
+        if !descendants.is_empty() {
+            self.changed = true;
+            for key in descendants {
+                self.entries.remove(&key);
+            }
+        }
     }
 
     /// Loads entries from `.girst/index`, clearing entries if the file does not exist yet.
     pub fn load(&mut self) -> io::Result<()> {
+        self.changed = false;
         let bytes = match fs::read(&self.path) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -142,7 +195,11 @@ impl Index {
             Err(e) => return Err(e),
         };
 
-        self.entries = decode_dirc_v2(&bytes)?;
+        let decoded = decode_dirc_v2(&bytes)?;
+        self.entries = decoded
+            .into_iter()
+            .map(|entry| (entry.path.clone(), entry))
+            .collect();
         Ok(())
     }
 
@@ -157,16 +214,22 @@ impl Index {
         Ok(())
     }
 
-    /// Encodes the current entries as `DIRC` v2 and commits them through the held lockfile.
+    /// Encodes the current entries as `DIRC` v2 and commits them if modified, or rolls back the lock.
     pub fn write_updates(&mut self) -> io::Result<()> {
         let mut lock = self
             .lockfile
             .take()
             .ok_or_else(|| io::Error::other("index lockfile is not held"))?;
 
+        if !self.changed {
+            return lock.rollback();
+        }
+
         let encoded = encode_dirc_v2(&self.entries)?;
         lock.write(&encoded)?;
-        lock.commit()
+        lock.commit()?;
+        self.changed = false;
+        Ok(())
     }
 
     /// Releases the held lockfile without modifying `.girst/index`.
@@ -184,7 +247,7 @@ fn entry_pad_len(path_len: usize) -> usize {
 }
 
 /// Encodes `entries` into a complete `DIRC` v2 binary payload with trailing 20-byte SHA-1 checksum.
-fn encode_dirc_v2(entries: &[IndexEntry]) -> io::Result<Vec<u8>> {
+fn encode_dirc_v2(entries: &BTreeMap<String, IndexEntry>) -> io::Result<Vec<u8>> {
     let count = u32::try_from(entries.len())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "too many index entries"))?;
 
@@ -193,7 +256,7 @@ fn encode_dirc_v2(entries: &[IndexEntry]) -> io::Result<Vec<u8>> {
     out.extend_from_slice(&DIRC_VERSION.to_be_bytes());
     out.extend_from_slice(&count.to_be_bytes());
 
-    for entry in entries {
+    for entry in entries.values() {
         entry.write_to(&mut out);
     }
 
@@ -345,7 +408,7 @@ mod tests {
         let index_path = girst_dir.join("index");
         let mut index = Index::new(&index_path);
         index.load().expect("missing index should load empty");
-        assert!(index.entries().is_empty());
+        assert!(index.is_empty());
 
         fs::write(root.join("a"), b"1").unwrap();
         fs::write(root.join("ab"), b"12").unwrap();
@@ -365,7 +428,9 @@ mod tests {
         assert_eq!(e3.mode, EXECUTABLE_MODE);
 
         index.load_for_update().expect("lock index");
-        index.entries_mut().extend([e1.clone(), e2.clone(), e3.clone()]);
+        index.add(e1.clone());
+        index.add(e2.clone());
+        index.add(e3.clone());
         index.write_updates().expect("write index");
         assert!(!girst_dir.join("index.lock").exists());
 
@@ -384,7 +449,8 @@ mod tests {
 
         let mut reloaded = Index::new(&index_path);
         reloaded.load().expect("reload index");
-        assert_eq!(reloaded.entries(), &[e1, e2, e3]);
+        let loaded_entries: Vec<IndexEntry> = reloaded.entries().cloned().collect();
+        assert_eq!(loaded_entries, vec![e1, e2, e3]);
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -402,7 +468,7 @@ mod tests {
 
         let mut index = Index::new(&index_path);
         index.load_for_update().unwrap();
-        index.entries_mut().push(entry);
+        index.add(entry);
         index.write_updates().unwrap();
 
         let valid = fs::read(&index_path).unwrap();
@@ -436,6 +502,64 @@ mod tests {
             Index::new(&index_path).load().unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn index_add_resolves_file_to_directory_conflicts_and_sorts_entries() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        let file_path = root.join("sample");
+        fs::write(&file_path, b"x").unwrap();
+        let meta = fs::metadata(&file_path).unwrap();
+        let oid = hex_to_oid("4444444444444444444444444444444444444444").unwrap();
+
+        let mut index = Index::new(root.join("index"));
+        index.add(IndexEntry::from_metadata("a", oid, &meta));
+        index.add(IndexEntry::from_metadata("ab", oid, &meta));
+        index.add(IndexEntry::from_metadata("a/c/d", oid, &meta));
+        index.add(IndexEntry::from_metadata("a/b", oid, &meta));
+
+        let paths: Vec<&str> = index.entries().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["a/b", "a/c/d", "ab"]);
+        assert!(index.is_changed());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn index_add_resolves_directory_to_file_conflicts_and_skips_unchanged_write() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        let index_path = root.join("index");
+        let file_path = root.join("sample");
+        fs::write(&file_path, b"x").unwrap();
+        let meta = fs::metadata(&file_path).unwrap();
+        let oid = hex_to_oid("5555555555555555555555555555555555555555").unwrap();
+
+        let mut index = Index::new(&index_path);
+        index.load_for_update().unwrap();
+        index.add(IndexEntry::from_metadata("a/b", oid, &meta));
+        index.add(IndexEntry::from_metadata("a/c/d", oid, &meta));
+        index.add(IndexEntry::from_metadata("ab", oid, &meta));
+        let entry_a = IndexEntry::from_metadata("a", oid, &meta);
+        index.add(entry_a.clone());
+        index.write_updates().unwrap();
+
+        let paths: Vec<&str> = index.entries().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["a", "ab"]);
+        assert!(!index.is_changed());
+
+        // Re-adding an identical entry must leave changed == false and skip rewriting the index file.
+        let ino_before = fs::metadata(&index_path).unwrap().ino();
+        let mut reopened = Index::new(&index_path);
+        reopened.load_for_update().unwrap();
+        reopened.add(entry_a);
+        assert!(!reopened.is_changed());
+        reopened.write_updates().unwrap();
+        assert!(!root.join("index.lock").exists());
+        assert_eq!(fs::metadata(&index_path).unwrap().ino(), ino_before);
 
         let _ = fs::remove_dir_all(&root);
     }
