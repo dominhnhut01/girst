@@ -31,11 +31,11 @@ fn main() {
                 match workspace.list_files() {
                     Ok(file_paths) => {
                         for file_path in file_paths {
-                            let data = match workspace.read_file(file_path) {
+                            let data = match workspace.read_file(&file_path) {
                                 Ok(data) => data,
                                 Err(e) => panic!("Failed reading file. {}", e),
                             };
-                            let mut blob = Blob::new(data.into_bytes());
+                            let mut blob = Blob::new(data);
                             match database.store(&mut blob) {
                                 Ok(()) => {}
                                 Err(e) => panic!("Failed storing to the database. {}", e),
