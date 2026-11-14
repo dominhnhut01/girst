@@ -1,11 +1,12 @@
 //! CLI entry point for `girst`.
 
-mod data_model;
-mod girst_init;
 use core::panic;
 use std::{env, path::PathBuf};
 
-use data_model::{blob::Blob, database::Database, workspace::Workspace};
+use girst::{
+    data_model::{blob::Blob, database::Database, workspace::Workspace},
+    girst_init,
+};
 
 /// Parses CLI arguments and dispatches `init` and `commit` commands.
 fn main() {

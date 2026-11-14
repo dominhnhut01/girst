@@ -57,7 +57,6 @@ impl Workspace {
     }
 
     /// Returns the Git file mode (`"100755"` if executable on Unix, `"100644"` otherwise) for `path`.
-    #[allow(dead_code)]
     pub fn stat_mode(&self, path: &Path) -> io::Result<&'static str> {
         let metadata = fs::metadata(self.path.join(path))?;
         if metadata.permissions().mode() & 0o111 != 0 {

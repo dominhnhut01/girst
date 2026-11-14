@@ -9,7 +9,6 @@ pub trait GitObject {
     fn to_bytes(&self) -> Vec<u8>;
 
     /// Returns the 40-character hex SHA-1 object ID if computed.
-    #[allow(dead_code)]
     fn oid(&self) -> Option<&str>;
 
     /// Stores the computed 40-character hex SHA-1 object ID on this object.

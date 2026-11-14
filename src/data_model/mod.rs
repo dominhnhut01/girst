@@ -2,5 +2,7 @@
 
 pub mod blob;
 pub mod database;
+pub mod entry;
 pub mod object;
+pub mod tree;
 pub mod workspace;
