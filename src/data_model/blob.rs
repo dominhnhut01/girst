@@ -3,6 +3,7 @@
 use super::object::GitObject;
 
 /// In-memory representation of a Git `blob` object.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Blob {
     oid: Option<String>,
     data: Vec<u8>,
@@ -12,6 +13,11 @@ impl Blob {
     /// Creates a new `Blob` from raw file bytes with no assigned OID.
     pub fn new(data: Vec<u8>) -> Self {
         Blob { oid: None, data }
+    }
+
+    /// Returns a slice of the raw blob payload bytes.
+    pub fn data(&self) -> &[u8] {
+        &self.data
     }
 }
 

@@ -18,8 +18,8 @@ impl Entry {
         }
     }
 
-    /// Returns `true` when this entry represents a subtree (`mode == "40000"`).
+    /// Returns `true` when this entry represents a subtree (`mode == "40000"` or `"040000"`).
     pub fn is_dir(&self) -> bool {
-        self.mode == "40000"
+        self.mode == "40000" || self.mode == "040000"
     }
 }

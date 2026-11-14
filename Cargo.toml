@@ -9,7 +9,7 @@ edition = "2021"
 sha1 = "0.10"
 hex = "0.4"
 rand = "0.8"
-deflate = "1.0.0"
+flate2 = "1.0"
 [dependencies.uuid]
 version = "1.8.0"
 features = [

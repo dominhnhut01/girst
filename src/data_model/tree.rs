@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, io, path::PathBuf};
 use super::{database::Database, entry::Entry, object::GitObject};
 
 /// In-memory representation of a Git `tree` object.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tree {
     oid: Option<String>,
     entries: Vec<Entry>,

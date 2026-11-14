@@ -3,6 +3,7 @@
 use super::{author::Author, object::GitObject};
 
 /// In-memory representation of a Git `commit` object.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Commit {
     oid: Option<String>,
     tree: String,
@@ -29,6 +30,49 @@ impl Commit {
             committer: formatted_author,
             message: message.into(),
         }
+    }
+
+    /// Reconstructs a `Commit` from parsed header fields and commit `message`.
+    pub fn from_parts(
+        tree: String,
+        parent: Option<String>,
+        author: String,
+        committer: String,
+        message: String,
+    ) -> Self {
+        Commit {
+            oid: None,
+            tree,
+            parent,
+            author,
+            committer,
+            message,
+        }
+    }
+
+    /// Returns the root tree 40-character hex OID referenced by this commit.
+    pub fn tree(&self) -> &str {
+        &self.tree
+    }
+
+    /// Returns the parent commit 40-character hex OID, if any.
+    pub fn parent(&self) -> Option<&str> {
+        self.parent.as_deref()
+    }
+
+    /// Returns the formatted author line.
+    pub fn author(&self) -> &str {
+        &self.author
+    }
+
+    /// Returns the formatted committer line.
+    pub fn committer(&self) -> &str {
+        &self.committer
+    }
+
+    /// Returns the commit message body.
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
