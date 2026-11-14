@@ -19,6 +19,22 @@ fn temp_repo_dir() -> PathBuf {
     std::env::temp_dir().join(format!("girst_interop_test_{}", Uuid::new_v4()))
 }
 
+/// Reads the commit OID referenced by `.girst/HEAD`, following a symbolic `ref:` if present.
+fn read_head_oid(repo: &std::path::Path) -> String {
+    let head = fs::read_to_string(repo.join(".girst/HEAD"))
+        .expect("read .girst/HEAD")
+        .trim()
+        .to_string();
+    if let Some(rel) = head.strip_prefix("ref: ") {
+        fs::read_to_string(repo.join(".girst").join(rel))
+            .expect("read symbolic HEAD target")
+            .trim()
+            .to_string()
+    } else {
+        head
+    }
+}
+
 #[test]
 fn init_two_commits_parent_chain_and_git_fsck_full() {
     let repo = temp_repo_dir();
@@ -73,10 +89,7 @@ fn init_two_commits_parent_chain_and_git_fsck_full() {
         c1_stdout.starts_with("[(root-commit) ") && c1_stdout.trim_end().ends_with("] initial commit"),
         "unexpected first commit stdout: {c1_stdout}"
     );
-    let oid1 = fs::read_to_string(repo.join(".girst/HEAD"))
-        .expect("read HEAD after c1")
-        .trim()
-        .to_string();
+    let oid1 = read_head_oid(&repo);
 
     fs::create_dir_all(repo.join("docs")).unwrap();
     fs::write(repo.join("docs/guide.md"), b"guide\n").unwrap();
@@ -112,10 +125,7 @@ fn init_two_commits_parent_chain_and_git_fsck_full() {
             && c2_stdout.trim_end().ends_with("] second commit"),
         "unexpected second commit stdout: {c2_stdout}"
     );
-    let oid2 = fs::read_to_string(repo.join(".girst/HEAD"))
-        .expect("read HEAD after c2")
-        .trim()
-        .to_string();
+    let oid2 = read_head_oid(&repo);
     assert_ne!(oid1, oid2);
 
     let parent_out = Command::new("git")

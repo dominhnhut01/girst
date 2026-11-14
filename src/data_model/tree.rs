@@ -85,12 +85,13 @@ impl GitObject for Tree {
         let mut out = Vec::new();
         for entry in &sorted {
             // Binary entry wire layout: "<mode> <name>\0<20-byte raw SHA-1>".
-            let raw_oid = hex::decode(&entry.oid).expect("entry oid must be valid 40-char hex");
-            out.extend_from_slice(entry.mode.as_bytes());
-            out.push(b' ');
-            out.extend_from_slice(entry.name.as_bytes());
-            out.push(0);
-            out.extend_from_slice(&raw_oid);
+            if let Ok(raw_oid) = hex::decode(&entry.oid) {
+                out.extend_from_slice(entry.mode.as_bytes());
+                out.push(b' ');
+                out.extend_from_slice(entry.name.as_bytes());
+                out.push(0);
+                out.extend_from_slice(&raw_oid);
+            }
         }
         out
     }

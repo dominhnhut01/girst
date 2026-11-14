@@ -15,9 +15,10 @@ use girst::{
         database::Database,
         diff::{diff_cached, diff_workspace},
         index::{hex_to_oid, Index, IndexEntry},
-        log::{collect_log, format_log, format_oneline},
+        log::{collect_log, collect_log_from, format_log, format_oneline},
         object::GitObject,
         refs::Refs,
+        revision::resolve_revision,
         status::StatusReport,
         tree::Tree,
         workspace::Workspace,
@@ -36,13 +37,15 @@ fn main() -> ExitCode {
     }
 }
 
-/// Dispatches `init`, `add`, `commit`, `status`, `diff`, and `log` subcommands from process arguments.
+/// Dispatches `init`, `add`, `commit`, `status`, `diff`, `log`, and `branch` subcommands from process arguments.
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     let command = args
         .get(1)
         .map(String::as_str)
-        .ok_or_else(|| "Usage: girst <init|add|commit|status|diff|log> [options]".to_string())?;
+        .ok_or_else(|| {
+            "Usage: girst <init|add|commit|status|diff|log|branch> [options]".to_string()
+        })?;
 
     match command {
         "init" => run_init(&args[2..]),
@@ -51,6 +54,7 @@ fn run() -> Result<(), String> {
         "status" => run_status(&args[2..]),
         "diff" => run_diff(&args[2..]),
         "log" => run_log(&args[2..]),
+        "branch" => run_branch(&args[2..]),
         _ => Err(format!("'{command}' is not a girst command.")),
     }
 }
@@ -275,13 +279,19 @@ fn run_diff(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Executes `girst log [--oneline]` in the current working directory.
+/// Executes `girst log [--oneline] [<rev>]` in the current working directory.
 fn run_log(args: &[String]) -> Result<(), String> {
-    let oneline = match args {
-        [] => false,
-        [flag] if flag == "--oneline" => true,
-        _ => return Err("Usage: girst log [--oneline]".to_string()),
-    };
+    let mut oneline = false;
+    let mut rev: Option<&str> = None;
+    for arg in args {
+        if arg == "--oneline" && !oneline {
+            oneline = true;
+        } else if arg.starts_with('-') || rev.is_some() {
+            return Err("Usage: girst log [--oneline] [<rev>]".to_string());
+        } else {
+            rev = Some(arg.as_str());
+        }
+    }
 
     let root_dir = PathBuf::from(".");
     let girst_path = root_dir.join(".girst");
@@ -291,7 +301,15 @@ fn run_log(args: &[String]) -> Result<(), String> {
 
     let db = Database::new(girst_path.join("objects"));
     let refs = Refs::new(&girst_path);
-    let commits = collect_log(&db, &refs).map_err(|e| format!("Failed reading log: {e}"))?;
+    let commits = match rev {
+        None => collect_log(&db, &refs),
+        Some(expr) => {
+            let start_oid = resolve_revision(&db, &refs, expr)
+                .map_err(|e| format!("Failed resolving '{expr}': {e}"))?;
+            collect_log_from(&db, Some(start_oid))
+        }
+    }
+    .map_err(|e| format!("Failed reading log: {e}"))?;
 
     let output = if oneline {
         format_oneline(&commits)
@@ -300,4 +318,53 @@ fn run_log(args: &[String]) -> Result<(), String> {
     };
     print!("{output}");
     Ok(())
+}
+
+/// Executes `girst branch [-d <name> | <name> [<start-rev>]]` in the current working directory.
+fn run_branch(args: &[String]) -> Result<(), String> {
+    let root_dir = PathBuf::from(".");
+    let girst_path = root_dir.join(".girst");
+    if !girst_path.is_dir() {
+        return Err("Not a girst repository (or any of the parent directories): .girst".to_string());
+    }
+
+    let refs = Refs::new(&girst_path);
+    match args {
+        [] => {
+            let branches = refs
+                .list_branches()
+                .map_err(|e| format!("Failed listing branches: {e}"))?;
+            for (name, is_active) in branches {
+                if is_active {
+                    println!("* {name}");
+                } else {
+                    println!("  {name}");
+                }
+            }
+            Ok(())
+        }
+        [flag, name] if flag == "-d" => {
+            let deleted_oid = refs
+                .delete_branch(name)
+                .map_err(|e| format!("Failed deleting branch '{name}': {e}"))?;
+            let short_oid = deleted_oid.get(..7).unwrap_or(&deleted_oid);
+            println!("Deleted branch {name} (was {short_oid}).");
+            Ok(())
+        }
+        [name] if !name.starts_with('-') => {
+            let db = Database::new(girst_path.join("objects"));
+            let oid = resolve_revision(&db, &refs, "HEAD")
+                .map_err(|e| format!("Failed resolving 'HEAD': {e}"))?;
+            refs.create_branch(name, &oid)
+                .map_err(|e| format!("Failed creating branch '{name}': {e}"))
+        }
+        [name, start_rev] if !name.starts_with('-') => {
+            let db = Database::new(girst_path.join("objects"));
+            let oid = resolve_revision(&db, &refs, start_rev)
+                .map_err(|e| format!("Failed resolving '{start_rev}': {e}"))?;
+            refs.create_branch(name, &oid)
+                .map_err(|e| format!("Failed creating branch '{name}': {e}"))
+        }
+        _ => Err("Usage: girst branch [-d <name> | <name> [<start-rev>]]".to_string()),
+    }
 }

@@ -18,7 +18,14 @@ const MONTHS: [&str; 12] = [
 ///
 /// Returns `Ok(Vec::new())` when `HEAD` is unborn and `InvalidData` if a parent cycle is detected.
 pub fn collect_log(db: &Database, refs: &Refs) -> io::Result<Vec<Commit>> {
-    let Some(mut cur_oid) = refs.read_head()? else {
+    collect_log_from(db, refs.read_head()?)
+}
+
+/// Walks the commit parent chain starting from `start_oid`, returning commits newest-first.
+///
+/// Returns `Ok(Vec::new())` when `start_oid` is `None` and `InvalidData` if a parent cycle is detected.
+pub fn collect_log_from(db: &Database, start_oid: Option<String>) -> io::Result<Vec<Commit>> {
+    let Some(mut cur_oid) = start_oid else {
         return Ok(Vec::new());
     };
 
